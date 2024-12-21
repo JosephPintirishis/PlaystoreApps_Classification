@@ -11,6 +11,7 @@ app popularity on the Playstore, with a focus on multiclass and binary classific
 
 - **`PlaystoreApps_final.html`** and **`PlaystoreApps_final.RMD`**: The final report rendered from R Markdown, showcasing the entire analysis, visualizations, and results.
 - **`DSC532_CLASS.pdf`**: The final project report documenting the project’s methodology and findings.
+- **`train.csv`**: The input data.
 - **`LICENSE`**: The MIT License file, outlining the terms under which the project can be used, modified, and distributed.
 
 ## Data Sources
