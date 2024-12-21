@@ -1,5 +1,3 @@
-# PlaystoreApps_Classification
-
 # Playstore Apps Classification Project
 
 ## Overview
