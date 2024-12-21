@@ -1,0 +1,1371 @@
+---
+title: "Playstore Apps (Classification Problem)"
+output: html_document
+date: "07-04-2024"
+---
+## Introduction
+
+  Team Members:
+
+ Andreas Papadopoulos
+ 
+ Constantinos Constantinou
+ 
+ Foivos Lympouras
+ 
+ Iosif Pintirishis
+
+In today's fast-moving smartphone world, Android is a key player, with over 2 billion people using it every month. This success comes from not just its easy-to-use design and high-tech features, but also from the huge number of apps available, both free and paid. Our university project is all about understanding how popular an Android app might become. We plan to use machine learning to predict how many times an app will be downloaded based on different factors.
+
+ 
+
+```{r}
+rm(list = ls())
+```
+
+
+## Functions 
+```{r}
+# Convert the size to number
+convert_size_to_bytes <- function(size) {
+  num <- as.numeric(sub("[^0-9.]", "", size))
+  unit <- substr(size, nchar(size), nchar(size))
+  
+  if (!is.na(num)) {
+    if (unit == "k") {
+      return(num/1024)  
+    } else if (unit == "M") {
+      return(num)  # Megabytes to bytes
+    } else {
+      # If there is no k or M, assume the number is already in bytes
+      return(num / (1024^2))
+    }
+  } else {
+    # Return NA if the numeric part couldn't be extracted
+    return(NA)
+  }
+}
+
+```
+
+
+## Load packages 
+```{r}
+list.of.packages <- c("ggplot2","DescTools", "nortest", "moments", "dplyr","corrplot","mice","factoextra","patchwork", "class","fastDummies", "randomForest", "MASS", "naivebayes", "glmnet")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
+# Install them in case they are not already
+if (length(new.packages)) install.packages(new.packages)
+# Load packages
+invisible(lapply(list.of.packages, library, character.only = TRUE))
+```
+
+## Import data 
+  
+  We found our dataset in a machine hack's competition and below we you can find the link for the competition. 
+  [Playstore Dataset](https://machinehack.com/hackathons/playstore_app_downloads_prediction_weekend_hackathon_16/overview?fbclid=IwAR2AawYkaJ2RFt73R9nUGk7zLDV-rTqfih883OoSStjd0z5yeUIH_V4EBY8)
+  
+```{r}
+# Import data
+playstore <- read.csv("Train.csv")
+
+names(playstore)
+head(playstore)
+nrow(playstore)
+```
+
+Attributes description:
+
+Offered_By: The publisher/Organization/Company that develops the application 
+
+Category: The category/Genre of the application 
+
+Rating: The total ratings received from consumers 
+
+Reviews: The total reviews received from consumers 
+
+Size: The size of the application with unit 
+
+Price: The total price of the application or cost of the in-app purchases 
+
+Content_Rating: The content rating for the application 
+
+Last_Updated_On: The date at which the application was last updated 
+
+Release_Version: The version of the application that is currently being served 
+
+OS_Version_Required: The minimum Android OS version required to run the application 
+
+Downloads: The approximated range of downloads for the application 
+
+## Data pre-processing 
+
+First, we will print a summary of all records of our dataset with the structure.
+Also, we will check if we have any missing values in our dataset. 
+```{r}
+summary(playstore)
+str(playstore) # structure of the dataset
+
+# check for missing values
+sum(is.na(playstore)) 
+# we don't have any missing values
+```
+
+There aren't any missing values in our dataset.
+
+Release_Version:
+```{r}
+#unique(playstore$Release_Version)
+#table(playstore$Release_Version)
+length(unique(playstore$Release_Version)) 
+```
+ 
+ The unique values of this variable are 4190.
+
+```{r}
+frequency_table <- table(playstore$Release_Version)
+names(frequency_table)[which.max(frequency_table)] 
+names(frequency_table)[which.min(frequency_table)] 
+sum(playstore$Release_Version == "Varies with device")/nrow(playstore) 
+```
+
+We found about the most frequent value which is "Varies with device" and the less frequent which is ":1.38.3+1". 
+
+We have 9.3% "Varies with device", which is less than 10%, so we decide to keep that feature and replace those values with the median.
+
+Release version Imputation:
+  Convert major version numbers into numeric format, and stores them in a new column named Major_Version within the same playstore dataframe.
+```{r}
+train_size <- floor(0.8 * nrow(playstore))
+
+set.seed(48)
+
+# a vector of row indices for the training set
+train_indices <- sample(seq_len(nrow(playstore)), size = train_size)
+```
+
+ We split the data of the playstore into 80% train set and 20% for test set.
+```{r}
+playstore$Major_Version <- as.numeric(gsub("([0-9]+).*", "\\1", playstore$Release_Version))
+# replace non-numeric values and "Varies with device" with NA
+playstore$Major_Version[!grepl("^[0-9]+", playstore$Release_Version)] <- NA
+
+# compute the median of the major column we create above
+median_version_train_set <- median(playstore$Major_Version[train_indices], na.rm = TRUE)
+
+# change the NA values with the median
+playstore$Major_Version[is.na(playstore$Major_Version)] <- median_version_train_set
+head(playstore$Major_Version)
+```
+
+
+OS_Version_Required :
+  Create a barplot of the frequency of OS_version_required's values. 
+```{r}
+unique(playstore$OS_Version_Required) 
+frequency_table <- table(playstore$OS_Version_Required)
+barplot(frequency_table)
+```
+
+Most of the values are around "4.1 and up" but also there are around 1500 values at the right corner.
+
+
+```{r}
+names(frequency_table)[which.max(frequency_table)]
+names(frequency_table)[which.min(frequency_table)]
+
+sum(playstore$OS_Version_Required== "Varies with device")/nrow(playstore)
+```
+We have 8.8% "Varies with device",which is less than 10%, so we decide to keep that feature and replace those values with the median.
+
+OS Version required Imputation:
+  Convert it to numeric format and stores them in a new column.
+```{r}
+#keep only numeric characters using gsub and then transform to numeric column
+playstore$OS_Version_Numeric <- as.numeric(gsub("^([0-9]+\\.[0-9]+).*", "\\1", playstore$OS_Version_Required))
+```
+
+Replace the value "Varies with device" and the values which are not numeric with NA. Then, we calculate the median of the column we create above excluding the NAs values. Finally, change the NA values with the median.
+```{r}
+#Replaces non-numeric OS version entries in 'playstore$OS_Version_Required' with NA
+playstore$OS_Version_Numeric[!grepl("^[0-9]+\\.[0-9]+", playstore$OS_Version_Required)] <- NA
+
+#Calculates the median value of the numeric OS version, omitting NA values.
+median_version <- median(playstore$OS_Version_Numeric, na.rm = TRUE)
+median_version
+
+#Imputes NA values in 'playstore$OS_Version_Numeric' with the median OS version number.
+playstore$OS_Version_Numeric[is.na(playstore$OS_Version_Numeric)] <- median_version
+
+head(playstore$OS_Version_Numeric)
+```
+
+## Exploratory Data Analysis (EDA) 
+#### Rating  
+
+ Firstly, we compute some statistics about the column `Rating`. 
+```{r}
+#Measures of Central Tendency
+summary(playstore$Rating)
+Mode(playstore$Rating)
+
+#Measures of variability
+var(playstore$Rating)
+sd(playstore$Rating)
+IQR(playstore$Rating)
+MeanAD(playstore$Rating)
+kurtosis(playstore$Rating)
+skewness(playstore$Rating)
+
+sum(is.na(playstore$Rating))
+```
+
+```{r}
+#Histogram
+par(mfrow=c(1,2))
+h1 = ggplot(playstore, aes(x = Rating)) + 
+  geom_histogram(fill = "blue") + labs(x="Rating" ) 
+
+h2 = ggplot(playstore, aes(x = Rating)) +
+  geom_density(fill = "skyblue", color = "blue", alpha = 0.7) +
+  labs(x="Rating")
+h1 + h2
+
+#Boxplot
+ggplot(playstore, aes(y = Rating)) +
+  geom_boxplot( alpha = 0.7)
+```
+
+We have a left skewed distribution,which tells us there are fewer items with lower ratings, and they are spread over a range. The Mode are around 4.5. From the boxplot we can see that the Median is 4.4.The length of the box represents the IQR, which looks quite narrow, suggesting that the middle 50% of ratings are not very spread out and are clustered towards the higher end of the scale. The presence of outliers at the low end of the rating scale suggests that there are a few unusually low ratings. This bottom whisker is long compared to the box, suggesting there is a considerable range of less common lower ratings.
+
+
+
+#### Reviews  
+
+Statistics for the column `Reviews`
+```{r}
+#Measures of Central Tendency
+summary(playstore$Reviews)
+Mode(playstore$Reviews)
+
+#Measures of variability
+var(playstore$Reviews)
+sd(playstore$Reviews)
+IQR(playstore$Reviews)
+MeanAD(playstore$Reviews)
+kurtosis(playstore$Reviews)
+skewness(playstore$Reviews)
+
+sum(is.na(playstore$Reviews))
+```
+
+
+```{r}
+#Histogram
+h1 <- ggplot(playstore, aes(x = Reviews)) +  
+  geom_histogram(fill = "blue") + labs(x="Reviews" )
+h2 <- ggplot(playstore, aes(x = log(Reviews))) +  # we put Log
+  geom_histogram(fill = "blue") + labs(x="Reviews" )
+h1 + h2
+
+#boxplot
+b1 <- ggplot(playstore, aes(y = Reviews)) +
+  geom_boxplot( alpha = 0.7)
+
+b2 <- ggplot(playstore, aes(y = log(Reviews))) + #we try again with log(Reviews)
+  geom_boxplot( alpha = 0.7)
+b1 + b2
+```
+
+Histograms: the first one is with the actual values of the column. Almost all data points fall into the first bin, which is around zero.This suggests that a vast majority of the items have a relatively small number of reviews. Then, plot it with the log(Reviews) and this histogram provides a more detailed view of data.There's a long tail to the right, which shows that while most items have fewer reviews, a small number have a much higher count, stretching out the distribution.
+
+Boxplots: Again, the first boxplot represent the spread and distribution of the original scale. So its hard to identify something so we plot again with the logarithm of the review counts. The  log-transformed reviews appears to be more symmetric, with the median line closer to the center of the box. The presence of outliers is visible.
+
+
+
+
+#### Price  
+
+
+```{r}
+#Measures of Central Tendency
+summary(playstore$Price)
+Mode(playstore$Price)
+```
+
+Replace the value "Free" with 0 and transform the column "Price" to numeric
+```{r}
+playstore$Price <- ifelse(playstore$Price == "Free", 0, playstore$Price) #for each value "Free" in the Price column, replace it with 0.
+
+playstore$Price <- as.numeric(playstore$Price)
+
+table(playstore$Price)
+
+```
+
+
+```{r}
+#Measures of variability
+var(playstore$Price)
+sd(playstore$Price)
+IQR(playstore$Price)
+
+MeanAD(playstore$Price)
+kurtosis(playstore$Price)
+skewness(playstore$Price)
+```
+
+```{r}
+#Histogram
+hist(subset(playstore,Price > 0 & Price <3000)$Price,
+     main="Histogram of Prices (0< Price< 3000)",
+     xlab = "Prices")
+#Boxplot
+boxplot(subset(playstore, Price > 0 & Price < 3000)$Price, 
+        main = "Boxplot of Prices (0 < Price < 3000)",col = "skyblue")
+```
+
+Histogram: The hist shows a large concentration of items at the lower price range. The distribution is right skewed.
+
+Boxplot: The median line is near the bottom of the box, we can infer that the median price is relatively low compared to the maximum price. There are lot of point beyond the top whisker which are consider as outliers.
+
+#### Category  
+
+
+```{r}
+unique(playstore$Category)
+length(unique(playstore$Category))
+```
+
+51 categories
+
+
+```{r}
+frequency_table <- table(playstore$Category)
+frequency_table
+
+names(frequency_table)[which.max(frequency_table)]
+names(frequency_table)[which.min(frequency_table)]
+```
+
+Most frequent category is "Education" and the less frequent is "Game Music"
+
+A bar plot of the count of each category. 
+```{r}
+#Barplot per Category
+frequency_table <- playstore %>%
+  group_by(Category) %>%
+  summarise(Count = n())
+
+ggplot(frequency_table, aes(x=reorder(Category, Count), y=Count)) + 
+  geom_bar(stat="identity") + 
+  coord_flip() + 
+  theme_minimal() +
+  labs(x="Category", y="Count", title="Bar Plot of 51 Categories")
+```
+
+The "education" category is by far the most frequent.
+
+Create new column called "newCategory" by grouping several existing categories into broader ones. 
+```{r}
+#playstore new category
+
+playstore$newCategory <- with(playstore, 
+                              ifelse(grepl("Game", Category), "Game",
+                                     ifelse(Category %in% c('Lifestyle', 'Health And Fitness', 'Beauty'), 'Lifestyle and Personal Care',
+                                            ifelse(Category %in% c('Travel And Local', 'Maps And Navigation'), 'Navigation and Travel',
+                                                   ifelse(Category %in% c('Shopping', 'Food And Drink'), 'Shopping and Services', Category))))
+)
+
+unique(playstore$newCategory)
+```
+
+```{r}
+playstore$newCategory <- as.factor(playstore$newCategory) # convert the newCategory to factor
+playstore_numeric_and_factor <- playstore[sapply(playstore, function(x) is.numeric(x) || is.factor(x))] # Create dataframe which includes only numeric or factors columns
+
+playstore_numeric <- playstore %>% select_if(is.numeric)
+
+playstore_numeric_scaled <- scale(playstore_numeric) # Standardizes the numeric data
+```
+
+Perform a k-means clustering on our dataset. We separate factor columns, from the dataframe we created above, playstore_numeric_and_factor, and we combine these with a scaled version of the numeric columns, ensuring that only complete cases with no missing values are used. The kmeans seperate the data into five clusters. Each entry is assigned to a cluster and categories are merged by assigning the most frequent category within each cluster to create a Merged_Category.
+```{r}
+# Select only the factor columns from playstore_numeric_and_factor
+factor_columns <- playstore_numeric_and_factor[sapply(playstore_numeric_and_factor, is.factor)]
+
+# Combine the factor columns with the scaled numeric dataframe
+playstore_combined <- cbind(playstore_numeric_scaled, factor_columns)
+
+playstore_numeric <- playstore %>% select_if(is.numeric)
+
+playstore_numeric_scaled <- scale(playstore_numeric,center = TRUE,scale = TRUE)
+playstore_numeric_scaled <- playstore_numeric_scaled[complete.cases(playstore_numeric_scaled), ]
+
+# Perform k-means clustering
+set.seed(123)  # for reproducibility
+k <- 5  # define the number of clusters
+km_res <- kmeans(playstore_numeric_scaled, centers = k, nstart = 25)
+
+# Add the cluster assignments 
+playstore$Cluster <- km_res$cluster
+
+# Merge the categories based on the most frequent category in each cluster
+playstore <- playstore %>%
+  group_by(Cluster) %>%
+  mutate(Merged_Category = names(which.max(table(Category)))) %>%
+  ungroup()
+
+unique(playstore$Cluster)
+```
+
+```{r}
+unique(playstore$Merged_Category)
+table(playstore$Merged_Category)
+ggplot(data=playstore,mapping=aes(x=Merged_Category)) + geom_bar()
+```
+
+#### Offered_By  
+
+  
+```{r}
+anyDuplicated(playstore$Offered_By) #320 duplicates
+#unique(playstore$Offered_By) # see the values of Offered_By
+frequency_table <- table(playstore$Offered_By)
+max_offered_by <- names(frequency_table)[which.max(frequency_table)]
+names(frequency_table)[which.min(frequency_table)] #"ps_id-1"
+
+max_count <- max(frequency_table)
+most_frequent_ids <- names(which(frequency_table == max_count)) #the most frequent publisher
+frequency_table[most_frequent_ids] #it appear 20 times
+```
+
+```{r}
+#Calculate the count of IDs for each number of occurrences
+ids_for_each_occurrence <- playstore%>%
+  group_by(Offered_By) %>%
+  summarise(count = n()) %>%
+  group_by(count) %>%
+  summarise(num_ids = n())
+ids_for_each_occurrence
+
+playstore[playstore$Offered_By == max_offered_by ,]$Category
+
+```
+
+
+#### Size  
+
+```{r}
+#unique(playstore$Size) # See the values of Size
+
+frequency_table <- table(playstore$Size)
+#frequency_table
+names(frequency_table)[which.max(frequency_table)]
+names(frequency_table)[which.min(frequency_table)]
+```
+
+```{r}
+sum(playstore$Size == "Varies with device") 
+(sum(playstore$Size == "Varies with device") / nrow(playstore))*100 
+```
+We have 11.6% which is more than 10% so most probably we will not use it later in our model
+
+
+```{r}
+#check what measurements containing in the size column
+unit <- substr(playstore$Size, nchar(playstore$Size), nchar(playstore$Size))
+unique(unit)
+```
+
+```{r}
+num <- as.numeric(sub("[^0-9.]", "", playstore$Size)) # Extract numeric part
+unit <- substring(playstore$Size, nchar(playstore$Size))
+#unit
+```
+
+
+```{r}
+#convert size to bytes
+# Apply the function to the Size column
+suppressWarnings({
+playstore$Size <- sapply(playstore$Size, convert_size_to_bytes, USE.NAMES = FALSE)
+})
+sum(is.na(playstore$Size))
+nrow(playstore)
+```
+
+
+```{r}
+#Histogram with exponential density
+ggplot(playstore[!is.na(playstore$Size), ], aes(x = Size)) +
+  geom_histogram(fill = "blue", color = "black", bins = 30, aes(y = ..density..)) +  # Use density instead of frequency
+  labs(x = "Size", y = "Density", title = "Histogram of Size (NA values excluded)") +
+  # Calculate the rate for the exponential distribution
+  # Add exponential distribution curve using stat_function
+  stat_function(fun = function(x) { dexp(x, rate = 1/mean(playstore$Size, na.rm = TRUE)) }, 
+                color = "red", size = 1) + theme_minimal()
+
+#Density Plot
+ggplot(playstore, aes(x = Size)) +
+  geom_density(fill = "skyblue", color = "blue", alpha = 0.7) + labs(x="Size")
+
+ks.test(playstore$Size, "pexp", rate =  1 / mean(playstore$Size, na.rm = TRUE))
+```
+
+We reject the null hypothesis despite the fact that the hist seems to follow exponential distribution with rate =  $\frac{1}{\mu_{\text{Size}}}$. 
+
+
+
+#### Content_Rating  
+
+We have `Content_Rating` values, with "Everyone" to be 10 times most usual than the others.
+```{r}
+unique(playstore$Content_Rating)
+
+frequency_table <- table(playstore$Content_Rating)
+frequency_table
+
+ggplot(data = playstore, mapping = aes(x = Content_Rating)) + geom_bar()
+```
+
+
+#### Last_Updated_On  
+
+Finding the most and least frequent value of the column.
+```{r}
+names(frequency_table)[which.max(frequency_table)]
+names(frequency_table)[which.min(frequency_table)] 
+```
+
+```{r}
+playstore$date_column <- as.Date(playstore$Last_Updated_On, format = "%b %d %Y") #change the format of the date to "year - month - day"
+
+
+playstore$year <- format(playstore$date_column, "%Y") #extract the year from each date
+
+year_count <- table(playstore$year)
+
+# Create a barplot with the frequencies
+barplot(year_count, main = "Frequency of Years", xlab = "Year", ylab = "Count", las = 2)
+```
+
+From the barplot we can observe an increasing trend over the years with the highest counts at the last 2 years. The increase might indicate a growing number of items being added to the dataset each year.
+
+```{r}
+playstore$Last_Updated_On <- as.Date(playstore$Last_Updated_On, format = "%b %d %Y") #converts the "Last Update On" column from character or factor into date object
+
+playstore$Last_Updated_On <- as.numeric(difftime(playstore$Last_Updated_On, min(playstore$Last_Updated_On), units = "days")) # after converting the column to dates, we calculate the difference in days between each date in the Last_Updated_On column and the oldest date in that column.
+head(playstore$Last_Updated_On)
+
+#remove columns date_column and year
+playstore <- subset(playstore, select = -date_column)
+playstore <- subset(playstore, select = -year)
+```
+
+
+
+
+
+#### Downloads  
+```{r}
+unique(playstore$Downloads) # see the values of Downloads
+```
+
+```{r}
+playstore$Downloads <- gsub(",", "", playstore$Downloads)  # Remove commas
+playstore$Downloads <- gsub("\\+", "", playstore$Downloads) # Remove the plus sign
+playstore$Downloads <- as.numeric(playstore$Downloads)      # Convert to numeric
+```
+
+```{r}
+frequency_table <- table(playstore$Downloads)
+frequency_table
+names(frequency_table)[which.max(frequency_table)] #"1e+05"
+names(frequency_table)[which.min(frequency_table)] #"5e+09"
+```
+
+```{r}
+barplot(frequency_table)
+```
+
+Check if the frequency table follows any Normal distribution.
+```{r}
+lillie.test(frequency_table)
+```
+
+We do not reject the null hypothesis. That means that the table above follows a Normal distribution.
+
+Check if the frequency table follows the standard normal distribution
+```{r}
+ks.test(frequency_table, "pnorm")
+```
+
+
+```{r}
+par(mfrow=c(1,2))
+boxplot(playstore$Downloads)
+boxplot(log(playstore$Downloads))
+```
+
+In the left boxplot using the original values without any tranformation the median is very close to the bottom of the box, which this means that at least half of the download counts are relatively low. There are several outliers above the upper whisker. The distribution is highly right-skewed. The right boxplot displays the distribution of download counts after a logarithm transformation. The median now is closer to the center of the box, which suggest that the transformed data has a symmetric distribution. The range of the data is more compact and the box appears more proportionally spread, indicating less skewness in the log-transformed data. Outliers are still present but appear less extreme on the logarithmic scale.
+
+ We created 8 classes for our response variable.
+```{r}
+
+num_classes <- 8 
+#We transform the column to numeric
+playstore$Downloads <- as.numeric(as.character(playstore$Downloads)) 
+
+
+#We calculate the quantiles of the column and divide the data into 8 groups
+
+#The seq function is used to create a sequence from 0 to 1 with length equal to num_classes + 1 to create the correct number of intervals.
+quantiles <- quantile(playstore$Downloads, probs = seq(0, 1, length.out = num_classes + 1), na.rm = TRUE)
+quantiles
+
+#creating a new column 'Class'.
+#cut function is used to divide the 'Downloads' into bins defined by the previously calculated quantiles.
+#we also make sure that the lowest value is included in the first bin.
+playstore <- playstore %>%
+  mutate(Class = cut(Downloads, breaks = quantiles, labels = FALSE, include.lowest = TRUE))
+playstore$Class <- playstore$Class-1
+
+class_summary <- playstore %>%
+  group_by(Class) %>%
+  summarise(
+    Min_Downloads = min(Downloads),
+    Max_Downloads = max(Downloads),
+    Count = n()
+  )
+
+class_summary
+table(playstore$Class)
+playstore$Class <- as.factor(playstore$Class)
+```
+
+
+#### Correlations and Covariations
+
+```{r}
+numeric_cols <- sapply(playstore, is.numeric)
+numeric_data <- playstore[numeric_cols]
+numeric_data$Class <- NULL
+numeric_data$Size <- NULL
+# Now playstore$numeric_downloads is a numeric representation of the Downloads
+# You can check correlation with another numeric column like this:
+cor_matrix <- cor(numeric_data, use = "everything")
+cor_matrix
+
+
+# Plot the correlation matrix
+corrplot(cor_matrix, type = "upper", method = "number", number.cex = 1, cl.pos = "b", 
+         tl.col = "red",  
+         tl.srt = 45)
+
+```
+ 
+We can see that Rating has no
+correlation with Downloads and also it’s not correlated with
+the other predictors, except 'Cluster'. Reviews is only correlated
+with 'Downloads'. Lastly, 'Last_Updated_On' seems to be
+slightly correlated with 'OS_Version_Numeric'. There are no
+other correlations between the features.
+
+Content_Rating - Rating
+
+```{r}
+g1 = ggplot(data = playstore, mapping = aes(x = Rating)) +
+  geom_freqpoly(mapping = aes(colour = Content_Rating), binwidth = 0.1) +
+  labs(x = "Rating", y = "Count", title = "Count of Ratings by Content Rating")
+
+g2 = ggplot(data = playstore, mapping = aes(x = Rating, y = ..density..)) +
+  geom_freqpoly(mapping = aes(colour = Content_Rating), binwidth = 0.1) +
+  labs(x = "Rating", y = "Density", title = "Density of Ratings by Content Rating")
+g1 + g2
+```
+
+
+
+```{r}
+#Boxplot Rating - Content_Rating
+ggplot(playstore, aes(x = Content_Rating, y = Rating)) + 
+  geom_boxplot(aes(fill = Content_Rating)) +  
+  theme(axis.text.x = element_text(angle = 0, hjust = 1)) 
+
+```
+
+In the boxplots with the distribution of ratings across different
+content ratings , we can see that the medians
+are above 4 for all categories, suggesting that apps tend
+to be rated favorably. All contents except of ’Adults only
+18+’ and ’unrated’ has outliers. All the outliers are below
+the lower whisker. Categories like ’Everyone’ and ’Teen’ have
+more outliers.
+
+
+
+Boxplots with various columns and the Class feature.
+```{r}
+#Boxplot Class - Rating
+ggplot(playstore, aes(x = as.factor(playstore$Class), y = Rating)) + 
+  geom_boxplot(aes(fill = as.factor(playstore$Class))) +  
+  theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+  labs(x="Class",y="Rating", fill = "Class")
+
+#Boxplot Class - Reviews
+ggplot(playstore, aes(x =as.factor(playstore$Class), y = log(Reviews))) + 
+  geom_boxplot(aes(fill = as.factor(playstore$Class))) +  
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))+
+  labs(x="Class",y="Reviews", fill = "Class")
+
+
+
+playstore_filtered <- subset(playstore, Price > 0 & Price < 3000)
+sum(playstore_filtered$Class == 6)
+sum(playstore_filtered$Class == 7)
+
+ggplot(playstore_filtered, aes(x = as.factor(Class), y = Price)) + 
+  geom_boxplot(aes(fill = as.factor(Class))) +  
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))+
+    labs(x="Class",y="Price", fill = "Class")
+
+
+ggplot(playstore, aes(x = as.factor(Class), y = Last_Updated_On)) + 
+  geom_boxplot(aes(fill = as.factor(Class))) +  
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))+
+    labs(x="Class",y="Last_Updated_On", fill = "Class")
+
+
+ggplot(playstore, aes(x = as.factor(Class), y = Major_Version)) + 
+  geom_boxplot(aes(fill = as.factor(Class))) +  
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))+
+    labs(x="Class",y="Major_Version", fill = "Class")
+
+
+ggplot(playstore, aes(x = as.factor(Class), y = OS_Version_Numeric)) + 
+  geom_boxplot(aes(fill = as.factor(Class))) +  
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))+
+    labs(x="Class",y="OS_Version_Numeric", fill = "Class")
+
+```
+
+
+
+
+ Two categorical:
+
+```{r}
+#Category - Content_Rating
+ggplot(data = playstore) + geom_count(mapping = aes(x = Content_Rating, y = Category))
+
+ggplot(data = playstore) + geom_count(mapping = aes(x = Content_Rating, y = Merged_Category))
+
+ggplot(data = playstore) + 
+  geom_count(mapping = aes(x = as.factor(Class), y = Merged_Category)) +
+  xlab("Class")
+
+```
+
+
+
+  Continuous - Continuous:
+
+Reviews - Rating  
+```{r}
+# Reviews - Rating 
+plot(playstore$Reviews, playstore$Rating, xlab ="Reviews", ylab = "Rating")
+plot(log10(playstore$Reviews + 1), playstore$Rating, xlab ="Log10(Reviews + 1)", ylab = "Rating")
+```
+
+
+```{r}
+playstore$Reviews_log <- log(playstore$Reviews + 1)
+qqnorm(playstore$Reviews_log)
+qqline(playstore$Reviews_log, col = "red")
+#maybe follows a normal distribution
+
+lillie.test(playstore$Reviews)
+lillie.test(playstore$Reviews_log) 
+```
+
+
+Q-Q plot which is used to compare the distribution of a dataset against normal distribution. The red line represents what the plot would look like if the playstore$Reviews_log data followed a normal distribution perfectly. In this Q-Q plot, while many points in the middle portion follow the line closely, there's a noticeable deviation at both ends. The points that significantly deviate from the line, especially in the tails, may suggest outliers or a distribution that is not symmetric.
+
+Since p-value<0.05 ($\alpha=0.05$ significance level) then we Reject the Null Hypothesis. Thus, it does not follow any normal distribution.
+
+```{r}
+ks.test(playstore$Rating, playstore$Reviews) # Reject H0, they don't follow the same distribution
+```
+
+Since p-value<0.05 ($\alpha=0.05$ significance level) then we Reject the Null Hypothesis. Thus, they do not follow the same distribution.
+
+Price - Rating:
+```{r}
+#Price - Rating
+playstore$Price <- gsub("[^0-9.]", "", playstore$Price)
+playstore$Price <- as.numeric(playstore$Price) #make Price column numeric
+plot(playstore$Price + 1, playstore$Rating, xlab ="Price", ylab = "Rating")
+plot(log10(playstore$Price + 1), playstore$Rating, xlab ="Price", ylab = "Rating")
+```
+
+#### Content Rating Encoding
+
+Encode the 'Content_Rating' column into dummy, a binary indicator, variables.
+```{r}
+playstore <- dummy_cols(playstore, select_columns = "Content_Rating",remove_first_dummy = TRUE)
+names(playstore)#create dummy variables for each unique value
+colnames(playstore) <- gsub(" ", "_", colnames(playstore))
+colnames(playstore) <- gsub("\\+", "plus", colnames(playstore))
+names(playstore)
+```
+
+
+## Feature Selection 
+
+Split the dataset to train and test set
+```{r}
+names(playstore)
+
+# Create the training dataset
+train.X <- playstore[train_indices, c("Rating", "Reviews", "Price", "Last_Updated_On", "Cluster",
+                                       "Content_Rating_Everyone",
+                                      "Content_Rating_Everyone_10plus", "Content_Rating_Mature_17plus",
+                                      "Content_Rating_Teen", "Content_Rating_Unrated", "Major_Version",
+                                      "OS_Version_Numeric")]
+
+train.Class <- playstore$Class[train_indices]
+
+# Create the test dataset (the rest of the data not included in the training set)
+test.X <- playstore[-train_indices, c("Rating", "Reviews", "Price", "Last_Updated_On", "Cluster",
+                                       "Content_Rating_Everyone",
+                                      "Content_Rating_Everyone_10plus", "Content_Rating_Mature_17plus",
+                                      "Content_Rating_Teen", "Content_Rating_Unrated", "Major_Version",
+                                      "OS_Version_Numeric")]
+
+
+test.Class <- playstore$Class[-train_indices]
+```
+
+```{r}
+train.X.matrix <- as.matrix(train.X)
+test.X.matrix <- as.matrix(test.X)
+train.Class <- as.numeric(train.Class)
+
+grid <- 10^seq(10, -2, length = 100)
+# alpha = 1 for Lasso regression
+lasso.mod <- glmnet(train.X.matrix, train.Class, alpha = 1, lambda = grid)
+plot(lasso.mod)
+
+set.seed(3)
+# Alpha set to 1 for LASSO regression
+# Fit the LASSO regression model using cross-validation to find the optimal lambda
+cv.lasso <- cv.glmnet(train.X.matrix, train.Class, alpha = 1)
+
+plot(cv.lasso)
+
+# The best lambda value found by cross-validation
+(best_lambda_lasso <- cv.lasso$lambda.min)
+
+# Fit the final LASSO regression model using the best lambda
+final.lasso.model <- glmnet(train.X.matrix, train.Class, alpha = 1, lambda = best_lambda_lasso)
+
+# To make predictions on the test set
+lasso.coef <- predict(final.lasso.model, type="coefficients", s = best_lambda_lasso)[1:13,]
+lasso.coef[lasso.coef != 0]
+```
+
+After conducting LASSO regression analysis on our dataset, we have identified several key predictors that are instrumental in determining the outcome. The important features that the LASSO model selected include `Reviews`, `Price`,  `Rating`, `Last_Updated_On`, `Cluster`, `Content_Rating_Everyone`, `Content_Rating_Everyone_10plus`, `Major_Version`, and `OS_Version_Numeric`. Thus, we use all the predictors since the ones that are not important are dummy variables of the `Content_Rating`.
+
+## Model
+
+KNN- Let's try to see what results we get if we fit a KNN model with k=1
+```{r}
+knn.pred <- knn(train.X, test.X, train.Class, k = 1)
+cm<-table(knn.pred, test.Class)
+cm
+accuracy <- sum(diag(cm)) / sum(cm)
+accuracy
+
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+
+for (i in 1:nrow(cm)) {
+  tp <- cm[i, i]
+  fp <- sum(cm[-i, i])
+  fn <- sum(cm[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+KNN with k = 5 (avoid overfitting). 
+```{r}
+knn.pred <- knn(train.X, test.X, train.Class, k = 5)
+cm<-table(knn.pred, test.Class)
+cm
+accuracy <- sum(diag(cm)) / sum(cm)
+accuracy
+
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+
+for (i in 1:nrow(cm)) {
+  tp <- cm[i, i]
+  fp <- sum(cm[-i, i])
+  fn <- sum(cm[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+We have better scores when we fit our model
+with k=5 than k=1.
+
+KNN with k = 10 (avoid overfitting). 
+```{r}
+knn.pred <- knn(train.X, test.X, train.Class, k = 10)
+cm<-table(knn.pred, test.Class)
+cm
+accuracy <- sum(diag(cm)) / sum(cm)
+accuracy
+
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+
+for (i in 1:nrow(cm)) {
+  tp <- cm[i, i]
+  fp <- sum(cm[-i, i])
+  fn <- sum(cm[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+We have even better scores. With k=10 we have better scores than k=5, which has better scores than k=1.
+
+```{r}
+train.X <- playstore[train_indices, c("Rating", "Reviews", "Price", "Last_Updated_On", "Cluster",
+                                      "Content_Rating_Everyone",
+                                      "Content_Rating_Everyone_10plus", "Content_Rating_Mature_17plus",
+                                      "Content_Rating_Teen", "Content_Rating_Unrated", "Major_Version",
+                                      "OS_Version_Numeric")]
+
+train.Class <- playstore$Class[train_indices]
+
+# Create the test dataset (the rest of the data not included in the training set)
+test.X <- playstore[-train_indices, c("Rating", "Reviews", "Price", "Last_Updated_On", "Cluster",
+                                       "Content_Rating_Everyone",
+                                      "Content_Rating_Everyone_10plus", "Content_Rating_Mature_17plus",
+                                      "Content_Rating_Teen", "Content_Rating_Unrated", "Major_Version",
+                                      "OS_Version_Numeric")]
+
+
+test.Class <- playstore$Class[-train_indices]
+```
+
+
+Random Forest
+```{r}
+rf.model <- randomForest(x = train.X, y = train.Class, ntree = 500, mtry = 3, importance = TRUE)
+
+importance(rf.model)
+
+# Use the Random Forest model to make predictions on the test dataset
+rf.pred <- predict(rf.model, newdata = test.X)
+
+# Create a confusion matrix with the predictions and the true class labels
+cm <- table(rf.pred, test.Class)
+cm
+
+# Calculate accuracy
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Calculate precision, recall, and F1 score for each class
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+for (i in 1:nrow(cm)) {
+  tp <- cm[i, i]
+  fp <- sum(cm[-i, i])
+  fn <- sum(cm[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+By checking the Mean Decrease Accuracy the 5 most important predictors are `Reviews`, `Price`, `Rating`, `Cluster` and `Last_Updated_On`. For the Mean Decrease Gini the 5 most important predictors are `Reviews`, `Rating`, `Last_Updated_On`, `Major_Version` and `OS_Version_Numeric`.                 
+Reviews seems to be the most important in both metrics and it confirms our corellation matrix's indication that it is highly correlated with `Downloads`. We fit again Random Forest with the 3 common important predictors.
+
+```{r}
+rf.model <- randomForest(Class ~  Reviews + Last_Updated_On + Rating, data = playstore, subset = train_indices)
+
+# Use the Random Forest model to make predictions on the test dataset
+rf.pred <- predict(rf.model, newdata = test.X)
+
+# Create a confusion matrix with the predictions and the true class labels
+cm <- table(rf.pred, test.Class)
+cm
+# Calculate accuracy
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Calculate precision, recall, and F1 score for each class
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+for (i in 1:nrow(cm)) {
+  tp <- cm[i, i]
+  fp <- sum(cm[-i, i])
+  fn <- sum(cm[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+
+
+Let's try with a binary response variable. The threshold that we will use is 0.5.
+```{r}
+num_classes <- 2 # Create balanced classes
+# Determine the range cut-offs based on quantiles
+quantiles <- quantile(playstore$Downloads, probs = seq(0, 1, length.out = num_classes + 1), na.rm = TRUE)
+quantiles
+
+# Assign each observation to a class based on these cut-offs
+playstore <- playstore %>%
+  mutate(Class = cut(Downloads, breaks = quantiles, labels = FALSE, include.lowest = TRUE))
+playstore$Class <- playstore$Class -1
+class_summary <- playstore %>%
+  group_by(Class) %>%
+  summarise(
+    Min_Downloads = min(Downloads),
+    Max_Downloads = max(Downloads),
+    Count = n()
+  )
+class_summary
+
+playstore$Class <- ifelse(playstore$Class==0, 'Not Popular', 'Popular')
+playstore$Class <- as.factor(playstore$Class)
+table(playstore$Class)
+```
+
+
+
+Logistic Regression - We fit a logistic regression model using the predictors
+of the feature selection.
+```{r}
+test.set <-playstore[-train_indices, ]
+test.Class <- playstore$Class[-train_indices]
+
+glm.fits <- glm(
+  Class ~  Reviews + Last_Updated_On + Cluster + Rating + Price + Content_Rating_Everyone +Content_Rating_Teen+ Content_Rating_Mature_17plus+ OS_Version_Numeric + Major_Version +Content_Rating_Unrated+ Content_Rating_Everyone_10plus, family = binomial, data = playstore, subset = train_indices)
+summary(glm.fits)
+glm.probs <- predict(glm.fits, test.set,
+                     type = "response")
+
+glm.pred <- rep("Not Popular", nrow(test.set))
+glm.pred[glm.probs > .5] <- "Popular"
+lg<- table(glm.pred, test.Class)
+lg
+accuracy <- sum(diag(lg)) / sum(lg)
+mean(glm.pred == test.Class)
+
+contrasts(playstore$Class)
+precision <- recall <- f1_score <- rep(NA, nrow(lg))
+
+for (i in 1:nrow(lg)) {
+  tp <- lg[i, i]
+  fp <- sum(lg[-i, i])
+  fn <- sum(lg[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+results <- c()
+results$lg <- accuracy
+
+results_f1 <- c()
+results_f1$lg <- macro_f1_score
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+We observe high scores: All metrics are above the 0.90
+
+
+
+Interaction terms - Fit a logistic regression model with the same predictors as
+before, but now we add an interaction term of 'Reviews' and 'Last_Updated_On'
+```{r}
+glm.fits <- glm(
+  Class ~  Reviews*Last_Updated_On + Cluster + Rating + Price + Content_Rating_Everyone +Content_Rating_Teen+ Content_Rating_Mature_17plus+ OS_Version_Numeric + Major_Version +Content_Rating_Unrated+ Content_Rating_Everyone_10plus, family = binomial, data = playstore, subset = train_indices
+)
+
+glm.probs <- predict(glm.fits, test.set,
+                     type = "response")
+
+
+glm.pred <- rep("Not Popular", nrow(test.set))
+glm.pred[glm.probs > .5] <- "Popular"
+lg<- table(glm.pred, test.Class)
+lg
+accuracy <- sum(diag(lg)) / sum(lg)
+accuracy
+mean(glm.pred == test.Class)
+
+contrasts(playstore$Class)
+precision <- recall <- f1_score <- rep(NA, nrow(lg))
+
+for (i in 1:nrow(lg)) {
+  tp <- lg[i, i]
+  fp <- sum(lg[-i, i])
+  fn <- sum(lg[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+results$lgint <- accuracy
+
+results_f1$lgint <- macro_f1_score
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+We have similar scores when we use logistic regression with interaction term and
+without it.
+
+LDA - Very low accuracy compare to Logistic Regression
+```{r}
+lda.fit <- lda( Class ~  Reviews + Last_Updated_On + Cluster + Rating + Price + Content_Rating_Everyone +Content_Rating_Teen+Content_Rating_Mature_17plus+ OS_Version_Numeric + Major_Version +Content_Rating_Unrated+ Content_Rating_Everyone_10plus, family = binomial, data = playstore, subset = train_indices )
+lda.fit
+
+lda.pred <- predict(lda.fit, test.set)
+names(lda.pred)
+lda.class <- lda.pred$class
+table(lda.class, test.Class)
+
+accuracy <- mean(lda.class == test.Class)
+results$lda <- accuracy
+accuracy
+```
+
+Naive Bayes - Higher Accuracy than LDA, but lower scores than 
+Logistic Regression
+```{r}
+naivebayes.fit <- naive_bayes( Class ~  Reviews + Last_Updated_On + Cluster + Rating + Price + Content_Rating_Everyone +Content_Rating_Teen+Content_Rating_Mature_17plus+ OS_Version_Numeric + Major_Version +Content_Rating_Unrated+ Content_Rating_Everyone_10plus, family = binomial, data = playstore, subset = train_indices)
+
+naivebayes.class <- predict(naivebayes.fit, test.set)
+table(naivebayes.class, test.Class)
+
+mean(naivebayes.class == test.Class)
+
+naivebayes.pred <- predict(naivebayes.fit, test.set)
+cm <- table(Predicted = naivebayes.pred, Actual = test.Class)
+
+# Calculate accuracy
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Initializing vectors to store metrics for each class
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+
+# Calculating metrics for each class
+for (i in 1:nrow(cm)) {
+  # True Positives
+  tp <- cm[i, i]
+  # False Positives
+  fp <- sum(cm[-i, i])
+  # False Negatives
+  fn <- sum(cm[i, -i])
+  # Calculating Precision, Recall, and F1 Score for the class
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0,
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+results$nb <- accuracy
+results_f1$nb <- macro_f1_score
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+Random Forest - Now we try to use again Random Forest, but now in a binary 
+response. It has similar scores with Logistic Regression.
+```{r}
+rf.model <- randomForest(Class ~  Reviews + Last_Updated_On + Cluster + Rating + Price + Content_Rating_Everyone +Content_Rating_Teen+Content_Rating_Mature_17plus+ OS_Version_Numeric + Major_Version +Content_Rating_Unrated+ Content_Rating_Everyone_10plus, data = playstore, subset = train_indices, importance = TRUE)
+
+importance(rf.model)
+
+# Use the Random Forest model to make predictions on the test dataset
+rf.pred <- predict(rf.model, newdata = test.X)
+
+# Create a confusion matrix with the predictions and the true class labels
+cm <- table(rf.pred, test.Class)
+cm
+# Calculate accuracy
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Calculate precision, recall, and F1 score for each class
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+for (i in 1:nrow(cm)) {
+  tp <- cm[i, i]
+  fp <- sum(cm[-i, i])
+  fn <- sum(cm[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+results$rf <- accuracy
+results_f1$rf <- macro_f1_score
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+
+By checking the Mean Decrease Accuracy the 5 most important predictors are `Reviews`, `Price`, `Rating`, `Cluster` and `Last_Updated_On`. For the Mean Decrease Gini the 5 most important predictors are `Reviews`, `Rating`, `Last_Updated_On`, `Major_Version` and `OS_Version_Numeric`.                 
+Reviews seems to be the most important in both metrics and it confirms our corellation matrix's indication that it is highly correlated with `Downloads`. We fit again Random Forest with the 3 common important predictors. (Exactly same as before in multiclass random forest)
+
+```{r}
+rf.model <- randomForest(Class ~  Reviews + Last_Updated_On +Rating, data = playstore, subset = train_indices, importance = TRUE)
+
+importance(rf.model)
+
+# Use the Random Forest model to make predictions on the test dataset
+rf.pred <- predict(rf.model, newdata = test.X)
+
+# Create a confusion matrix with the predictions and the true class labels
+cm <- table(rf.pred, test.Class)
+cm
+# Calculate accuracy
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Calculate precision, recall, and F1 score for each class
+precision <- recall <- f1_score <- rep(NA, nrow(cm))
+for (i in 1:nrow(cm)) {
+  tp <- cm[i, i]
+  fp <- sum(cm[-i, i])
+  fn <- sum(cm[i, -i])
+  precision[i] <- tp / (tp + fp)
+  recall[i] <- tp / (tp + fn)
+  f1_score[i] <- ifelse((precision[i] + recall[i]) == 0, 0, 
+                        (2 * precision[i] * recall[i]) / (precision[i] + recall[i]))
+}
+
+# Macro-average calculations (simple average across classes)
+macro_precision <- mean(precision, na.rm = TRUE)
+macro_recall <- mean(recall, na.rm = TRUE)
+macro_f1_score <- mean(f1_score, na.rm = TRUE)
+
+
+# Output the metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Macro Precision:", macro_precision, "\n")
+cat("Macro Recall:", macro_recall, "\n")
+cat("Macro F1 Score:", macro_f1_score, "\n")
+```
+
+We see that the results are slightly worse than with using all the predictors. That's we save the previous accuracy for Random Forest.
+```{r}
+barplot(unlist(results), xlab = "Test Accuracy", horiz = TRUE)
+```
+
+```{r}
+barplot(unlist(results_f1), xlab = "Test F1 Score", horiz = TRUE)
+```
+
+
+
